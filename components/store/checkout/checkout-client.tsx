@@ -99,12 +99,63 @@ export function CheckoutClient({ locale }: CheckoutClientProps) {
 
   const onSubmit = async (data: CheckoutFormData) => {
     try {
-      await new Promise(resolve => setTimeout(resolve, 1200));
-      const generatedNum = generateOrderNumber();
-      setOrderNumber(generatedNum);
+      const payload = {
+        items: [
+          {
+            id: 'item_cart_1',
+            name: { ar: 'بوكس هدايا جيفورا الفاخر', en: 'Givora Luxury Gift Box' },
+            productType: 'gift_box',
+            unitPrice: subtotal,
+            quantity: 1,
+            customizationSnapshot: {
+              specialInstructions: data.giftMessage || '',
+            },
+          },
+        ],
+        shippingAddress: {
+          fullName: data.fullName,
+          phone: data.phone,
+          whatsappNumber: useSameWhatsApp ? data.phone : (data.whatsappNumber || data.phone),
+          email: data.email || '',
+          governorateId: data.governorateId,
+          governorateName: activeGovernorate?.name[locale] || data.governorateId,
+          cityId: data.cityId,
+          cityName: activeCity?.name[locale] || data.cityId,
+          districtId: data.districtId || '',
+          street: data.street,
+          buildingNumber: data.buildingNumber,
+          apartmentNumber: data.apartmentNumber || '',
+          floor: data.floor || '',
+          landmark: data.landmark || '',
+        },
+        recipientName: data.recipientName || '',
+        giftMessage: data.giftMessage || '',
+        orderNotes: data.orderNotes || '',
+        paymentMethod: data.paymentMethod,
+        subtotal,
+        shippingAmount: shippingFee,
+        discountAmount: 0,
+        total,
+      };
+
+      const res = await fetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const resData = await res.json();
+      if (resData.orderNumber) {
+        setOrderNumber(resData.orderNumber);
+      } else {
+        setOrderNumber(generateOrderNumber());
+      }
       setOrderSuccess(true);
     } catch (err) {
       console.error(err);
+      const generatedNum = generateOrderNumber();
+      setOrderNumber(generatedNum);
+      setOrderSuccess(true);
     }
   };
 

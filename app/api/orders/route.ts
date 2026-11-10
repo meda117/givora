@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateOrderNumber } from '@/lib/utils';
+import { doc, setDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebase/client';
+import { COLLECTIONS } from '@/lib/firebase/collections';
 
 export const runtime = 'nodejs';
 
@@ -24,17 +27,22 @@ export async function POST(request: NextRequest) {
       ...body,
       status: 'new',
       paymentStatus: 'pending',
-      timeline: [{
-        id: `evt_${Date.now()}`,
-        status: 'new',
-        note: 'Order placed',
-        isInternal: false,
-        createdAt: new Date().toISOString(),
-        createdBy: 'customer',
-      }],
+      timeline: [
+        {
+          id: `evt_${Date.now()}`,
+          status: 'new',
+          note: 'Order placed',
+          isInternal: false,
+          createdAt: new Date().toISOString(),
+          createdBy: 'customer',
+        },
+      ],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
+
+    // Save directly to Firestore orders collection
+    await setDoc(doc(db, COLLECTIONS.ORDERS, orderId), order);
 
     return NextResponse.json({
       success: true,

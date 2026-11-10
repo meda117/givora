@@ -1,183 +1,313 @@
 'use client';
-import { ShoppingCart, Package, Users, TrendingUp, Clock, CheckCircle, XCircle, AlertTriangle } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import Link from 'next/link';
+import { ShoppingCart, Package, Users, TrendingUp, ArrowRight, Plus, RefreshCw, Loader2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { formatPrice } from '@/lib/utils';
-import type { Locale } from '@/types';
+import { db } from '@/lib/firebase/client';
+import { collection, getDocs, query, orderBy, limit } from 'firebase/firestore';
+import type { Locale, Order } from '@/types';
 
-const MOCK_STATS = {
-  totalSales: 185400,
-  totalOrders: 234,
-  totalCustomers: 189,
-  totalProducts: 67,
-  pendingOrders: 12,
-  completedOrders: 198,
-  cancelledOrders: 5,
-  lowStockProducts: 3,
-};
+interface OverviewMetrics {
+  totalRevenue: number;
+  ordersCount: number;
+  productsCount: number;
+  customersCount: number;
+  pendingCount: number;
+}
 
-const MOCK_RECENT_ORDERS = [
-  { id: 'GIV-123456-ABC', customer: 'سارة محمد (المعادي)', total: 650, status: 'new', date: '2026-11-10' },
-  { id: 'GIV-234567-DEF', customer: 'أحمد علي (الإسكندرية)', total: 350, status: 'preparing', date: '2026-11-10' },
-  { id: 'GIV-345678-GHI', customer: 'مريم محمود (التجمع)', total: 200, status: 'shipped', date: '2026-11-09' },
-  { id: 'GIV-456789-JKL', customer: 'كريم عبد العزيز (الشيخ زايد)', total: 850, status: 'delivered', date: '2026-11-09' },
-  { id: 'GIV-567890-MNO', customer: 'فاطمة حسن (المنصورة)', total: 450, status: 'confirmed', date: '2026-11-08' },
-];
-
-const STATUS_STYLES: Record<string, string> = {
-  new: 'bg-blue-50 text-blue-700',
-  confirmed: 'bg-indigo-50 text-indigo-700',
-  preparing: 'bg-amber-50 text-amber-700',
-  shipped: 'bg-purple-50 text-purple-700',
-  delivered: 'bg-green-50 text-green-700',
-  cancelled: 'bg-red-50 text-red-700',
-};
-
-const STATUS_LABELS: Record<string, { ar: string; en: string }> = {
-  new: { ar: 'جديد', en: 'New' },
-  confirmed: { ar: 'مؤكد', en: 'Confirmed' },
-  preparing: { ar: 'جاري التحضير', en: 'Preparing' },
-  shipped: { ar: 'تم الشحن', en: 'Shipped' },
-  delivered: { ar: 'تم التسليم', en: 'Delivered' },
-  cancelled: { ar: 'ملغي', en: 'Cancelled' },
+const STATUS_CONFIG: Record<string, { label: { ar: string; en: string }; variant: 'default' | 'success' | 'warning' | 'info' | 'danger' }> = {
+  pending: { label: { ar: 'جديد', en: 'Pending' }, variant: 'warning' },
+  confirmed: { label: { ar: 'مؤكد', en: 'Confirmed' }, variant: 'info' },
+  preparing: { label: { ar: 'جاري التحضير', en: 'Preparing' }, variant: 'info' },
+  shipped: { label: { ar: 'تم الشحن', en: 'Shipped' }, variant: 'default' },
+  delivered: { label: { ar: 'تم التسليم', en: 'Delivered' }, variant: 'success' },
+  cancelled: { label: { ar: 'ملغي', en: 'Cancelled' }, variant: 'danger' },
 };
 
 export function AdminOverview({ locale }: { locale: Locale }) {
   const isAr = locale === 'ar';
+  const [metrics, setMetrics] = useState<OverviewMetrics>({
+    totalRevenue: 0,
+    ordersCount: 0,
+    productsCount: 0,
+    customersCount: 0,
+    pendingCount: 0,
+  });
+  const [recentOrders, setRecentOrders] = useState<Order[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const fetchLiveMetrics = async () => {
+    setIsLoading(true);
+    try {
+      // 1. Fetch real orders from Firestore
+      const ordersSnap = await getDocs(collection(db, 'orders'));
+      let revenue = 0;
+      let pending = 0;
+      const uniqueCustomers = new Set<string>();
+
+      ordersSnap.forEach((docSnap) => {
+        const data = docSnap.data() as any;
+        if (data.total) revenue += Number(data.total);
+        if (data.status === 'new' || data.status === 'confirmed' || data.status === 'preparing') {
+          pending += 1;
+        }
+        if (data.shippingAddress?.phone) uniqueCustomers.add(data.shippingAddress.phone);
+        else if (data.phone) uniqueCustomers.add(data.phone);
+        else if (data.customerId) uniqueCustomers.add(data.customerId);
+      });
+
+      // 2. Fetch real products count from Firestore
+      const productsSnap = await getDocs(collection(db, 'products'));
+
+      // 3. Fetch recent 5 orders from Firestore
+      let ordersList: Order[] = [];
+      try {
+        const recentQuery = query(collection(db, 'orders'), orderBy('createdAt', 'desc'), limit(5));
+        const recentSnap = await getDocs(recentQuery);
+        ordersList = recentSnap.docs.map(d => ({ id: d.id, ...d.data() } as Order));
+      } catch (err) {
+        // Fallback if index not ready
+        ordersList = ordersSnap.docs
+          .map(d => ({ id: d.id, ...d.data() } as Order))
+          .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+          .slice(0, 5);
+      }
+
+      setMetrics({
+        totalRevenue: revenue,
+        ordersCount: ordersSnap.size,
+        productsCount: productsSnap.size,
+        customersCount: uniqueCustomers.size,
+        pendingCount: pending,
+      });
+      setRecentOrders(ordersList);
+    } catch (err) {
+      console.warn('Firestore live metrics fetch warning:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchLiveMetrics();
+  }, []);
 
   const statCards = [
     {
-      label: isAr ? 'إجمالي المبيعات' : 'Total Sales',
-      value: formatPrice(MOCK_STATS.totalSales, 'EGP', locale),
+      label: isAr ? 'إجمالي المبيعات' : 'Total Revenue',
+      value: formatPrice(metrics.totalRevenue, 'EGP', locale),
       icon: TrendingUp,
-      color: 'text-gold',
-      bg: 'bg-gold/10',
-      change: '+12%',
+      subtitle: isAr ? 'من واقع الطلبات الفعلية' : 'From verified orders',
     },
     {
       label: isAr ? 'إجمالي الطلبات' : 'Total Orders',
-      value: MOCK_STATS.totalOrders,
+      value: metrics.ordersCount.toLocaleString(),
       icon: ShoppingCart,
-      color: 'text-blue-600',
-      bg: 'bg-blue-50',
-      change: '+8%',
+      subtitle: isAr ? `${metrics.pendingCount} طلب بانتظار الشحن` : `${metrics.pendingCount} pending fulfillment`,
     },
     {
-      label: isAr ? 'إجمالي العملاء' : 'Total Customers',
-      value: MOCK_STATS.totalCustomers,
-      icon: Users,
-      color: 'text-purple-600',
-      bg: 'bg-purple-50',
-      change: '+5%',
-    },
-    {
-      label: isAr ? 'إجمالي المنتجات' : 'Total Products',
-      value: MOCK_STATS.totalProducts,
+      label: isAr ? 'المنتجات والبوكسات' : 'Catalog Items',
+      value: metrics.productsCount.toLocaleString(),
       icon: Package,
-      color: 'text-green-600',
-      bg: 'bg-green-50',
-      change: '+3',
+      subtitle: isAr ? 'منتج مسجل في الكتالوج' : 'Active catalog items',
+    },
+    {
+      label: isAr ? 'قاعدة العملاء' : 'Customer Reach',
+      value: metrics.customersCount.toLocaleString(),
+      icon: Users,
+      subtitle: isAr ? 'عميل أجرى طلبات' : 'Unique purchasing clients',
     },
   ];
 
   return (
-    <div className="space-y-6">
-      {/* Page title */}
-      <div>
-        <h1 className="text-2xl font-semibold text-charcoal">
-          {isAr ? 'نظرة عامة' : 'Dashboard Overview'}
-        </h1>
-        <p className="text-sm text-gray-500 mt-1">
-          {new Date().toLocaleDateString(locale === 'ar' ? 'ar-EG' : 'en-US', {
-            weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
-          })}
-        </p>
+    <div className="space-y-8 select-none">
+      {/* Header bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[var(--border-color)]">
+        <div>
+          <h1
+            className="text-2xl sm:text-3xl font-light text-[var(--text-main)]"
+            style={{ fontFamily: "'Cormorant Garamond', serif" }}
+          >
+            {isAr ? 'نظرة عامة على المتجر' : 'Store Executive Overview'}
+          </h1>
+          <p className="text-xs text-[var(--text-muted)] mt-1">
+            {isAr
+              ? 'مؤشرات الأداء الحقيقية ومتابعة الطلبات المباشرة من قاعدة بيانات Firestore'
+              : 'Real-time performance metrics synchronized directly from Firestore'}
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={fetchLiveMetrics}
+            disabled={isLoading}
+            leftIcon={<RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />}
+          >
+            {isAr ? 'تحديث البيانات' : 'Sync Live Data'}
+          </Button>
+
+          <Link href={`/${locale}/admin/products/new`}>
+            <Button size="sm" leftIcon={<Plus className="h-4 w-4" />}>
+              {isAr ? 'إضافة منتج جديد' : 'New Product'}
+            </Button>
+          </Link>
+        </div>
       </div>
 
-      {/* Stats Grid */}
+      {/* Real Metric Cards Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {statCards.map((card) => {
+        {statCards.map((card, i) => {
           const Icon = card.icon;
           return (
-            <div key={card.label} className="bg-white rounded-sm border border-gray-100 p-5">
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className="text-xs font-medium text-gray-500 mb-1">{card.label}</p>
-                  <p className="text-2xl font-bold text-charcoal">{card.value}</p>
-                  <span className="text-xs text-green-600 font-medium mt-1 inline-block">{card.change}</span>
+            <div
+              key={i}
+              className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-sm p-5 shadow-sm transition-all hover:border-[var(--text-main)]"
+            >
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs font-medium text-[var(--text-muted)]">{card.label}</span>
+                <div className="w-8 h-8 rounded-sm bg-[var(--bg-secondary)] border border-[var(--border-color)] flex items-center justify-center text-[var(--text-main)]">
+                  <Icon className="h-4 w-4" />
                 </div>
-                <div className={`p-3 rounded-sm ${card.bg}`}>
-                  <Icon className={`h-5 w-5 ${card.color}`} />
-                </div>
+              </div>
+              <div className="space-y-1">
+                <p className="text-2xl font-semibold tracking-tight text-[var(--text-main)] font-mono">
+                  {isLoading ? '...' : card.value}
+                </p>
+                <p className="text-[11px] text-[var(--text-muted)]">{card.subtitle}</p>
               </div>
             </div>
           );
         })}
       </div>
 
-      {/* Order status cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {[
-          { label: isAr ? 'طلبات معلقة' : 'Pending', value: MOCK_STATS.pendingOrders, icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50' },
-          { label: isAr ? 'مكتملة' : 'Completed', value: MOCK_STATS.completedOrders, icon: CheckCircle, color: 'text-green-600', bg: 'bg-green-50' },
-          { label: isAr ? 'ملغاة' : 'Cancelled', value: MOCK_STATS.cancelledOrders, icon: XCircle, color: 'text-red-600', bg: 'bg-red-50' },
-          { label: isAr ? 'مخزون منخفض' : 'Low Stock', value: MOCK_STATS.lowStockProducts, icon: AlertTriangle, color: 'text-orange-600', bg: 'bg-orange-50' },
-        ].map((item) => {
-          const Icon = item.icon;
-          return (
-            <div key={item.label} className="bg-white rounded-sm border border-gray-100 p-4 flex items-center gap-3">
-              <div className={`p-2 rounded-sm ${item.bg}`}>
-                <Icon className={`h-4 w-4 ${item.color}`} />
-              </div>
-              <div>
-                <p className="text-xs text-gray-500">{item.label}</p>
-                <p className="text-lg font-bold text-charcoal">{item.value}</p>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Recent Orders */}
-      <div className="bg-white rounded-sm border border-gray-100">
-        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-charcoal">
-            {isAr ? 'أحدث الطلبات' : 'Recent Orders'}
-          </h2>
-          <a href={`/${locale}/admin/orders`} className="text-xs text-gold hover:text-gold/80">
-            {isAr ? 'عرض الكل' : 'View All'}
-          </a>
+      {/* Quick Operations Matrix */}
+      <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-sm p-6 shadow-sm">
+        <h2 className="text-sm font-semibold text-[var(--text-main)] mb-4">
+          {isAr ? 'إجراءات تشغيل سريعة' : 'Quick Operations'}
+        </h2>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+          <Link
+            href={`/${locale}/admin/products/gift-boxes`}
+            className="p-3.5 rounded-sm border border-[var(--border-color)] bg-[var(--bg-secondary)] text-[var(--text-main)] font-medium hover:border-[var(--text-main)] transition-colors text-center block"
+          >
+            {isAr ? 'منشئ بوكسات الهدايا' : 'Gift Box Builder'}
+          </Link>
+          <Link
+            href={`/${locale}/admin/orders`}
+            className="p-3.5 rounded-sm border border-[var(--border-color)] bg-[var(--bg-secondary)] text-[var(--text-main)] font-medium hover:border-[var(--text-main)] transition-colors text-center block"
+          >
+            {isAr ? 'متابعة وفحص الطلبات' : 'Order Pipeline'}
+          </Link>
+          <Link
+            href={`/${locale}/admin/shipping`}
+            className="p-3.5 rounded-sm border border-[var(--border-color)] bg-[var(--bg-secondary)] text-[var(--text-main)] font-medium hover:border-[var(--text-main)] transition-colors text-center block"
+          >
+            {isAr ? 'تسعير شحن المحافظات' : 'Egyptian Shipping'}
+          </Link>
+          <Link
+            href={`/${locale}/admin/media`}
+            className="p-3.5 rounded-sm border border-[var(--border-color)] bg-[var(--bg-secondary)] text-[var(--text-main)] font-medium hover:border-[var(--text-main)] transition-colors text-center block"
+          >
+            {isAr ? 'مكتبة وسائط ImageKit' : 'ImageKit Media CDN'}
+          </Link>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-gray-50">
-                <th className="text-start px-6 py-3 text-xs font-medium text-gray-500">{isAr ? 'رقم الطلب' : 'Order #'}</th>
-                <th className="text-start px-6 py-3 text-xs font-medium text-gray-500">{isAr ? 'العميل' : 'Customer'}</th>
-                <th className="text-start px-6 py-3 text-xs font-medium text-gray-500">{isAr ? 'المبلغ' : 'Amount'}</th>
-                <th className="text-start px-6 py-3 text-xs font-medium text-gray-500">{isAr ? 'الحالة' : 'Status'}</th>
-                <th className="text-start px-6 py-3 text-xs font-medium text-gray-500">{isAr ? 'التاريخ' : 'Date'}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {MOCK_RECENT_ORDERS.map((order) => (
-                <tr key={order.id} className="border-b border-gray-50 hover:bg-gray-50/50 transition-colors">
-                  <td className="px-6 py-3">
-                    <a href={`/${locale}/admin/orders/${order.id}`} className="text-gold hover:underline font-mono text-xs">
-                      {order.id}
-                    </a>
-                  </td>
-                  <td className="px-6 py-3 text-charcoal">{order.customer}</td>
-                  <td className="px-6 py-3 font-medium">{formatPrice(order.total, 'EGP', locale)}</td>
-                  <td className="px-6 py-3">
-                    <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${STATUS_STYLES[order.status]}`}>
-                      {STATUS_LABELS[order.status]?.[locale]}
-                    </span>
-                  </td>
-                  <td className="px-6 py-3 text-gray-500 text-xs">{order.date}</td>
+      </div>
+
+      {/* Recent Live Orders Table */}
+      <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-sm shadow-sm overflow-hidden">
+        <div className="p-5 border-b border-[var(--border-color)] flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-[var(--text-main)]">
+              {isAr ? 'أحدث الطلبات المسجلة' : 'Recent Live Orders'}
+            </h2>
+            <p className="text-xs text-[var(--text-muted)] mt-0.5">
+              {isAr ? 'تحديث لحظي من قاعدة بيانات فايربيس' : 'Live synchronized from Firestore orders collection'}
+            </p>
+          </div>
+          <Link
+            href={`/${locale}/admin/orders`}
+            className="text-xs font-medium text-[var(--text-main)] hover:underline flex items-center gap-1"
+          >
+            <span>{isAr ? 'عرض كافة الطلبات' : 'View All'}</span>
+            <ArrowRight className="h-3.5 w-3.5 rtl:rotate-180" />
+          </Link>
+        </div>
+
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12 text-[var(--text-muted)] text-xs">
+            <Loader2 className="h-5 w-5 animate-spin me-2" />
+            <span>{isAr ? 'جارِ فحص قاعدة البيانات...' : 'Querying database...'}</span>
+          </div>
+        ) : recentOrders.length === 0 ? (
+          <div className="py-16 px-4 text-center text-[var(--text-muted)]">
+            <ShoppingCart className="h-10 w-10 mx-auto mb-3 opacity-30 stroke-1" />
+            <p className="text-sm font-medium text-[var(--text-main)]">
+              {isAr ? 'لا توجد طلبات واردة حتى الآن' : 'No customer orders recorded yet'}
+            </p>
+            <p className="text-xs text-[var(--text-muted)] mt-1 max-w-sm mx-auto">
+              {isAr
+                ? 'عند إتمام أي عميل لطلبية عبر المتجر، ستظهر هنا فورياً بكامل تفاصيل التخصيص ومعلومات الشحن.'
+                : 'When a customer places an order on the storefront, it will appear here in real time with all customization details.'}
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-start">
+              <thead className="bg-[var(--bg-secondary)] text-[var(--text-muted)] border-b border-[var(--border-color)]">
+                <tr>
+                  <th className="py-3 px-4 text-start font-medium">{isAr ? 'رقم الطلب' : 'Order ID'}</th>
+                  <th className="py-3 px-4 text-start font-medium">{isAr ? 'العميل' : 'Customer'}</th>
+                  <th className="py-3 px-4 text-start font-medium">{isAr ? 'المحافظة' : 'Governorate'}</th>
+                  <th className="py-3 px-4 text-start font-medium">{isAr ? 'الإجمالي' : 'Total'}</th>
+                  <th className="py-3 px-4 text-start font-medium">{isAr ? 'الحالة' : 'Status'}</th>
+                  <th className="py-3 px-4 text-start font-medium">{isAr ? 'التاريخ' : 'Date'}</th>
+                  <th className="py-3 px-4 text-end font-medium">{isAr ? 'الإجراء' : 'Action'}</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-[var(--border-color)]">
+                {recentOrders.map((ord) => {
+                  const statusConf = STATUS_CONFIG[ord.status] || STATUS_CONFIG.pending;
+                  return (
+                    <tr key={ord.id} className="hover:bg-[var(--bg-secondary)] transition-colors">
+                      <td className="py-3 px-4 font-mono font-medium text-[var(--text-main)]">
+                        {ord.orderNumber || ord.id.substring(0, 8)}
+                      </td>
+                      <td className="py-3 px-4 text-[var(--text-main)]">
+                        {(ord as any).customerName || ord.shippingAddress?.fullName || (isAr ? 'عميل متجر' : 'Client')}
+                      </td>
+                      <td className="py-3 px-4 text-[var(--text-muted)]">
+                        {(ord as any).governorateName || ord.shippingAddress?.governorate || ord.shippingAddress?.city || '—'}
+                      </td>
+                      <td className="py-3 px-4 font-mono font-semibold text-[var(--text-main)]">
+                        {formatPrice(ord.total || 0, 'EGP', locale)}
+                      </td>
+                      <td className="py-3 px-4">
+                        <Badge variant={statusConf.variant} size="sm">
+                          {statusConf.label[locale]}
+                        </Badge>
+                      </td>
+                      <td className="py-3 px-4 text-[var(--text-muted)]">
+                        {ord.createdAt ? new Date(ord.createdAt).toLocaleDateString('ar-EG') : '—'}
+                      </td>
+                      <td className="py-3 px-4 text-end">
+                        <Link
+                          href={`/${locale}/admin/orders`}
+                          className="text-[var(--text-main)] font-medium hover:underline"
+                        >
+                          {isAr ? 'فحص الطلب' : 'Inspect'}
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

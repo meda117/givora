@@ -136,3 +136,12 @@ body {
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* Hide Next.js development indicator icon and overlay */
+nextjs-portal,
+[data-nextjs-toast-wrapper],
+[data-nextjs-portal],
+#__next-build-watcher {
+  display: none !important;
+}
+

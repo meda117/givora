@@ -19,6 +19,7 @@ const nextConfig: NextConfig = {
     ],
   },
   serverExternalPackages: ['firebase-admin'],
+  devIndicators: false,
 };
 
 export default withNextIntl(nextConfig);

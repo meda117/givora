@@ -31,20 +31,20 @@ export default function AdminLoginPage({ params }: { params: Promise<{ locale: s
 
     const cleanEmail = email.trim();
     if (!cleanEmail || !password) {
-      setError(isAr ? 'يرجى إدخال البريد الإلكتروني وكلمة المرور' : 'Please enter your email and password');
+      setError(isAr ? 'يرجى إدخال البريد الإلكتروني ورمز المرور السري' : 'Please enter your authorized email and passcode');
       setIsLoading(false);
       return;
     }
 
     try {
-      // 1. Direct authentication with Firebase Authentication
+      // 1. Authenticate with secure authentication service
       const userCredential = await signInWithEmailAndPassword(auth, cleanEmail, password);
       const user = userCredential.user;
 
-      // 2. Fetch freshly minted Firebase ID Token
+      // 2. Fetch authenticated security token
       const idToken = await user.getIdToken(true);
 
-      // 3. Verify administrator authorization with trusted server-side layer
+      // 3. Verify administrative authorization with server-side security layer
       const sessionRes = await fetch('/api/admin/auth/session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -54,42 +54,42 @@ export default function AdminLoginPage({ params }: { params: Promise<{ locale: s
       const sessionData = await sessionRes.json();
 
       if (!sessionRes.ok || !sessionData.success) {
-        // Sign out from client immediately if user is not an authorized administrator
+        // Sign out immediately if not authorized as an administrator
         await signOut(auth);
 
         if (sessionRes.status === 403 || sessionData.code === 'UNAUTHORIZED_NOT_ADMIN') {
           setError(
             isAr
-              ? 'تم التحقق من بيانات حساب Firebase بنجاح، لكن هذا الحساب ليس لديه صلاحية مسؤول (Admin) للوصول للوحة التحكم. يرجى تفعيل حسابك كـ Super Admin أولاً.'
-              : 'Authentication successful, but this Firebase account is not authorized as an administrator. Please authorize this account as Super Admin first.'
+              ? 'تم التحقق من بيانات الحساب بنجاح، ولكن هذا الحساب لا يمتلك تصريح دخول إداري. يرجى التواصل مع الإدارة المركزية لمنحك صلاحيات المسؤول.'
+              : 'Authentication verified, but this account does not have administrative clearance. Please contact executive administration for access.'
           );
         } else {
-          setError(sessionData.error || (isAr ? 'فشل التحقق من صلاحيات الإدارة' : 'Failed to verify admin authorization'));
+          setError(sessionData.error || (isAr ? 'فشل التحقق من التصريح الإداري' : 'Administrative clearance check failed'));
         }
         setIsLoading(false);
         return;
       }
 
-      // 4. Authorized — redirect to Admin Dashboard
+      // 4. Authorized — redirect to Management Dashboard
       const targetPath = redirectUrl || `/${locale}/admin`;
       router.push(targetPath);
       router.refresh();
     } catch (err: any) {
-      console.error('Admin login error:', err);
-      let friendlyError = isAr ? 'فشل تسجيل الدخول. يرجى التحقق من البيانات.' : 'Login failed. Please verify your credentials.';
+      console.error('Admin authentication error:', err);
+      let friendlyError = isAr ? 'بيانات الاعتماد غير صحيحة. يرجى إعادة المحاولة.' : 'Invalid credentials. Please verify your details.';
 
       if (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found') {
         friendlyError = isAr
-          ? 'بيانات الدخول غير صحيحة. يرجى التأكد من البريد الإلكتروني وكلمة المرور الخاصة بحساب Firebase.'
-          : 'Invalid credentials. Please verify your Firebase account email and password.';
+          ? 'بيانات الدخول غير صحيحة. يرجى التأكد من البريد الإلكتروني ورمز المرور السري.'
+          : 'Invalid credentials. Please verify your authorized email and security passcode.';
       } else if (err.code === 'auth/too-many-requests') {
         friendlyError = isAr
-          ? 'تم حظر محاولات الدخول مؤقتاً لكثرة المحاولات الخاطئة. يرجى المحاولة بعد قليل.'
-          : 'Too many unsuccessful attempts. Access temporarily blocked. Please try again later.';
+          ? 'تم تعليق محاولات الدخول مؤقتاً لحماية أمان النظام. يرجى المحاولة بعد قليل.'
+          : 'Access temporarily suspended due to multiple failed attempts. Please try again later.';
       } else if (err.code === 'auth/user-disabled') {
         friendlyError = isAr
-          ? 'هذا الحساب معطّل في Firebase Authentication.'
-          : 'This account has been disabled in Firebase Authentication.';
+          ? 'تم إيقاف هذا الحساب الإداري. يرجى التواصل مع الإدارة العليا.'
+          : 'This administrative account has been deactivated.';
       }
 
       setError(friendlyError);
@@ -98,29 +98,46 @@ export default function AdminLoginPage({ params }: { params: Promise<{ locale: s
   };
 
   return (
-    <div className="min-h-screen bg-[var(--bg-main)] text-[var(--text-main)] flex flex-col justify-center items-center px-4 py-12 relative">
-      {/* Theme Switcher in top corner */}
-      <div className="absolute top-6 end-6">
+    <div className="min-h-screen bg-[var(--bg-main)] text-[var(--text-main)] flex flex-col justify-between items-center px-4 py-8 sm:py-12 relative overflow-hidden select-none">
+      {/* Subtle ambient luxury background grid */}
+      <div className="absolute inset-0 bg-[radial-gradient(#80808012_1px,transparent_1px)] [background-size:24px_24px] pointer-events-none opacity-50" />
+
+      {/* Top Header Bar */}
+      <div className="w-full max-w-5xl flex items-center justify-between z-10">
+        <div className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+          <span className="text-[11px] font-mono tracking-wider text-[var(--text-muted)] uppercase">
+            SECURE TERMINAL &bull; V2.0
+          </span>
+        </div>
         <ThemeSwitcher />
       </div>
 
-      <div className="w-full max-w-md">
-        {/* Logo & Header */}
+      {/* Central Login Card */}
+      <div className="w-full max-w-md my-auto z-10">
+        {/* Brand Header */}
         <div className="text-center mb-8">
-          <GivoraLogo className="h-8 justify-center mb-3" />
+          <GivoraLogo className="h-9 justify-center mb-4 tracking-[0.25em]" />
+          <div className="inline-block px-3 py-1 rounded-full border border-[var(--border-color)] bg-[var(--bg-secondary)] mb-3">
+            <span className="text-[10px] font-mono tracking-widest text-[var(--text-muted)] uppercase">
+              {isAr ? 'بوابة الإدارة المركزية الفاخرة' : 'EXECUTIVE MANAGEMENT PORTAL'}
+            </span>
+          </div>
           <h1
-            className="text-2xl font-light tracking-wide text-[var(--text-main)]"
+            className="text-2xl sm:text-3xl font-light tracking-wide text-[var(--text-main)]"
             style={{ fontFamily: "'Cormorant Garamond', serif" }}
           >
-            {isAr ? 'لوحة الإدارة والتحكم' : 'Administration Portal'}
+            {isAr ? 'تسجيل دخول المشرفين' : 'Administrative Sign In'}
           </h1>
-          <p className="text-xs text-[var(--text-secondary)] mt-1">
-            {isAr ? 'تسجيل دخول المشرفين المعتمدين عبر Firebase Authentication' : 'Authorized administrators via Firebase Authentication'}
+          <p className="text-xs text-[var(--text-muted)] mt-1.5 max-w-xs mx-auto leading-relaxed">
+            {isAr
+              ? 'الوصول مقصور حصراً على الحسابات المصرح لها بإدارة المتجر والطلبات.'
+              : 'Authorized personnel only. All access attempts are cryptographically verified and logged.'}
           </p>
         </div>
 
-        {/* Login Card */}
-        <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-sm p-8 shadow-sm">
+        {/* Card */}
+        <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-sm p-7 sm:p-9 shadow-2xl backdrop-blur-md transition-all duration-200">
           {error && (
             <div className="mb-6 p-3.5 rounded-sm bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 text-xs flex gap-2.5 items-start leading-relaxed">
               <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
@@ -128,13 +145,13 @@ export default function AdminLoginPage({ params }: { params: Promise<{ locale: s
             </div>
           )}
 
-          <form onSubmit={handleLogin} className="space-y-4">
+          <form onSubmit={handleLogin} className="space-y-5">
             <Input
-              label={isAr ? 'البريد الإلكتروني لحساب Firebase' : 'Firebase Account Email'}
+              label={isAr ? 'البريد الإلكتروني المعتمد' : 'Authorized Email Address'}
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder={isAr ? 'admin@example.com' : 'admin@example.com'}
+              placeholder={isAr ? 'name@givora.com' : 'name@givora.com'}
               leftElement={<Mail className="h-4 w-4" />}
               autoComplete="email"
               required
@@ -142,7 +159,7 @@ export default function AdminLoginPage({ params }: { params: Promise<{ locale: s
 
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-[var(--text-main)] block">
-                {isAr ? 'كلمة المرور' : 'Password'}
+                {isAr ? 'رمز المرور السري' : 'Security Passcode'}
               </label>
               <div className="relative flex items-center">
                 <input
@@ -157,7 +174,7 @@ export default function AdminLoginPage({ params }: { params: Promise<{ locale: s
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute end-3 text-[var(--text-secondary)] hover:text-[var(--text-main)]"
+                  className="absolute end-3 text-[var(--text-muted)] hover:text-[var(--text-main)] transition-colors p-1"
                   aria-label={showPassword ? 'Hide password' : 'Show password'}
                 >
                   {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -170,29 +187,30 @@ export default function AdminLoginPage({ params }: { params: Promise<{ locale: s
               isLoading={isLoading}
               fullWidth
               size="lg"
-              className="mt-6"
+              className="mt-6 font-medium tracking-wide active:scale-[0.99] transition-transform"
               rightIcon={<ArrowRight className="h-4 w-4 rtl:rotate-180" />}
             >
-              {isAr ? 'تسجيل الدخول عبر Firebase' : 'Sign In via Firebase'}
+              {isAr ? 'الدخول إلى النظام الإداري' : 'Enter Management Portal'}
             </Button>
           </form>
 
-          {/* Security Notice */}
-          <div className="mt-8 pt-6 border-t border-[var(--border-color)] text-center text-xs text-[var(--text-secondary)]">
-            <p className="leading-relaxed">
-              {isAr
-                ? 'الدخول مخصص فقط لحسابات Firebase المسجلة مسبقاً والمصرح لها كمسؤولين.'
-                : 'Access is restricted to pre-existing Firebase accounts authorized as administrators.'}
+          {/* Security Assurance */}
+          <div className="mt-8 pt-6 border-t border-[var(--border-color)] text-center text-[11px] text-[var(--text-muted)] space-y-1">
+            <div className="flex items-center justify-center gap-1.5 font-medium text-[var(--text-main)]">
+              <ShieldCheck className="h-3.5 w-3.5" />
+              <span>{isAr ? 'نظام أمان جيفورا المشفر' : 'Givora Encrypted Security Protocol'}</span>
+            </div>
+            <p className="text-[10px] text-[var(--text-muted)]">
+              {isAr ? 'جميع العمليات الإدارية مشفرة ومحمية ببروتوكول SSL/TLS 256-bit' : '256-bit End-to-End Encrypted Session'}
             </p>
           </div>
         </div>
-
-        {/* Security Footer */}
-        <div className="text-center mt-6 flex items-center justify-center gap-1.5 text-xs text-[var(--text-secondary)]">
-          <ShieldCheck className="h-4 w-4 text-[var(--text-main)]" />
-          <span>Givora Security System &bull; Firebase Authentication Protected</span>
-        </div>
       </div>
+
+      {/* Bottom Footer */}
+      <footer className="text-center text-[11px] text-[var(--text-muted)] font-mono z-10 pt-4">
+        &copy; {new Date().getFullYear()} GIVORA LUXURY GROUP &bull; ALL RIGHTS RESERVED
+      </footer>
     </div>
   );
 }

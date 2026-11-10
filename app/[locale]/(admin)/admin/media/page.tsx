@@ -1,31 +1,64 @@
 'use client';
-import { useState } from 'react';
-import { Upload, Trash2, Eye, Copy, Check, Image as ImageIcon, Video } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import Image from 'next/image';
+import { Trash2, Copy, Check, Image as ImageIcon, Film, Loader2, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import type { Locale } from '@/types';
+import { ImageKitUploader, type UploadedMediaItem } from '@/components/admin/media/imagekit-uploader';
+import { db } from '@/lib/firebase/client';
+import { collection, getDocs, doc, setDoc, deleteDoc, query, orderBy } from 'firebase/firestore';
 
 interface MediaAsset {
   id: string;
   name: string;
   type: 'image' | 'video';
   url: string;
-  size: string;
-  uploadedAt: string;
+  size?: string;
+  createdAt: string;
 }
-
-const INITIAL_MEDIA: MediaAsset[] = [
-  { id: '1', name: 'hero-banner-main.webp', type: 'image', url: 'https://ik.imagekit.io/givora/banners/hero-banner-main.webp', size: '240 KB', uploadedAt: '2026-11-01' },
-  { id: '2', name: 'luxury-rose-box-cover.webp', type: 'image', url: 'https://ik.imagekit.io/givora/products/luxury-rose-box.webp', size: '180 KB', uploadedAt: '2026-11-02' },
-  { id: '3', name: 'custom-necklace-video.mp4', type: 'video', url: 'https://ik.imagekit.io/givora/videos/necklace-showcase.mp4', size: '2.4 MB', uploadedAt: '2026-11-03' },
-  { id: '4', name: 'wedding-invitation-mockup.webp', type: 'image', url: 'https://ik.imagekit.io/givora/digital/wedding-mockup.webp', size: '150 KB', uploadedAt: '2026-11-04' },
-];
 
 export default function AdminMediaPage() {
   const isAr = true;
-  const locale: Locale = 'ar';
-  const [mediaList, setMediaList] = useState(INITIAL_MEDIA);
+  const [mediaList, setMediaList] = useState<MediaAsset[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const fetchMedia = async () => {
+    setIsLoading(true);
+    try {
+      const q = query(collection(db, 'media_assets'), orderBy('createdAt', 'desc'));
+      const snap = await getDocs(q);
+      const items = snap.docs.map(d => ({ id: d.id, ...d.data() } as MediaAsset));
+      setMediaList(items);
+    } catch (err) {
+      console.warn('Error fetching media assets from Firestore:', err);
+      setMediaList([]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchMedia();
+  }, []);
+
+  const handleUploadSuccess = async (item: UploadedMediaItem) => {
+    const newAsset: MediaAsset = {
+      id: item.fileId,
+      name: item.name,
+      type: item.fileType === 'video' ? 'video' : 'image',
+      url: item.url,
+      createdAt: new Date().toISOString(),
+    };
+
+    // Save metadata record to Firestore
+    try {
+      await setDoc(doc(db, 'media_assets', item.fileId), newAsset);
+      setMediaList(prev => [newAsset, ...prev]);
+    } catch (err) {
+      console.error('Failed to save media metadata to Firestore:', err);
+    }
+  };
 
   const copyUrl = (url: string, id: string) => {
     navigator.clipboard?.writeText(url);
@@ -33,91 +66,157 @@ export default function AdminMediaPage() {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const deleteMedia = (id: string) => {
-    setMediaList(mediaList.filter(m => m.id !== id));
+  const deleteMedia = async (id: string, fileId: string) => {
+    if (!confirm(isAr ? 'هل أنت متأكد من حذف هذا الملف من ImageKit وقاعدة البيانات؟' : 'Are you sure you want to delete this media?')) {
+      return;
+    }
+
+    try {
+      // 1. Delete from Firestore
+      await deleteDoc(doc(db, 'media_assets', id));
+
+      // 2. Delete from ImageKit via server route
+      fetch('/api/imagekit/delete', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileId }),
+      }).catch(console.error);
+
+      setMediaList(prev => prev.filter(m => m.id !== id));
+    } catch (err) {
+      console.error('Delete error:', err);
+    }
   };
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[var(--border-color)]">
         <div>
-          <h1 className="text-2xl font-semibold text-charcoal">
-            {isAr ? 'مكتبة الوسائط (ImageKit)' : 'Media Library (ImageKit)'}
+          <h1
+            className="text-2xl sm:text-3xl font-light text-[var(--text-main)]"
+            style={{ fontFamily: "'Cormorant Garamond', serif" }}
+          >
+            {isAr ? 'مكتبة الوسائط السحابية' : 'Media CDN Library'}
           </h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <p className="text-xs text-[var(--text-muted)] mt-1">
             {isAr
-              ? 'إدارة جميع صور وفيديوهات المنتجات والبانرات عبر شبكة ImageKit السريعة'
-              : 'Upload and organize high-resolution product photography and videos via ImageKit CDN'}
+              ? 'جميع الصور والفيديوهات ترفع مباشرة على شبكة ImageKit العالمية وتخزن بياناتها في فايربيس'
+              : 'Direct integration with ImageKit CDN & persistent Firestore catalog'}
           </p>
         </div>
-        <Button leftIcon={<Upload className="h-4 w-4" />}>
-          {isAr ? 'رفع ملفات جديدة' : 'Upload Media'}
+
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={fetchMedia}
+          disabled={isLoading}
+          leftIcon={<RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />}
+        >
+          {isAr ? 'تحديث الوسائط' : 'Refresh'}
         </Button>
       </div>
 
-      {/* Upload Dropzone */}
-      <div className="bg-white p-8 rounded-sm border-2 border-dashed border-gray-200 text-center hover:border-gold/50 transition-colors">
-        <div className="w-12 h-12 rounded-full bg-champagne/30 flex items-center justify-center mx-auto mb-3 text-gold">
-          <Upload className="h-6 w-6" />
-        </div>
-        <p className="text-sm font-semibold text-charcoal">
-          {isAr ? 'اسحب الصور والفيديوهات وأفلتها هنا' : 'Drag & drop images and videos here'}
-        </p>
-        <p className="text-xs text-gray-400 mt-1">
-          {isAr ? 'يتم تحسين المقاسات والضغط تلقائياً عبر ImageKit' : 'Automatic WebP/AVIF transformation via ImageKit'}
-        </p>
-        <div className="mt-4">
-          <input type="file" multiple className="hidden" id="admin-file-upload" />
-          <label htmlFor="admin-file-upload">
-            <Button size="sm" variant="outline">
-              {isAr ? 'تصفح جهازك' : 'Browse Local Files'}
-            </Button>
-          </label>
-        </div>
+      {/* Upload Component */}
+      <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-sm p-6 shadow-sm">
+        <h2 className="text-sm font-semibold text-[var(--text-main)] mb-3">
+          {isAr ? 'رفع صور أو فيديوهات جديدة إلى ImageKit' : 'Upload Assets to ImageKit'}
+        </h2>
+        <ImageKitUploader
+          onUploadSuccess={handleUploadSuccess}
+          folder="/givora/uploads"
+          hint={isAr ? 'الصور (PNG, JPG, WEBP) والفيديوهات (MP4) تُرفع وتُضغط تلقائياً عبر ImageKit' : 'Images and videos are compressed and served globally via ImageKit'}
+        />
       </div>
 
-      {/* Media Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-        {mediaList.map((item) => (
-          <div key={item.id} className="bg-white rounded-sm border border-gray-100 overflow-hidden group shadow-sm flex flex-col">
-            <div className="aspect-square bg-champagne/20 relative flex items-center justify-center">
-              {item.type === 'video' ? (
-                <Video className="h-10 w-10 text-charcoal/40" />
-              ) : (
-                <ImageIcon className="h-10 w-10 text-charcoal/30" />
-              )}
-              <div className="absolute top-2 start-2">
-                <Badge variant={item.type === 'video' ? 'info' : 'default'}>
-                  {item.type === 'video' ? 'Video' : 'Image'}
-                </Badge>
-              </div>
-            </div>
+      {/* Media Assets Grid */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-[var(--text-main)]">
+            {isAr ? `الملفات المرفوعة (${mediaList.length})` : `Uploaded Assets (${mediaList.length})`}
+          </h2>
+        </div>
 
-            <div className="p-3 flex-1 flex flex-col justify-between">
-              <div>
-                <p className="text-xs font-medium text-charcoal truncate" title={item.name}>{item.name}</p>
-                <p className="text-[10px] text-gray-400 mt-0.5">{item.size} · {item.uploadedAt}</p>
-              </div>
-
-              <div className="flex items-center justify-between pt-3 mt-2 border-t border-gray-50">
-                <button
-                  onClick={() => copyUrl(item.url, item.id)}
-                  className="text-xs text-gold hover:underline flex items-center gap-1"
-                >
-                  {copiedId === item.id ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                  <span>{copiedId === item.id ? (isAr ? 'تم النسخ' : 'Copied') : (isAr ? 'نسخ الرابط' : 'Copy URL')}</span>
-                </button>
-                <button
-                  onClick={() => deleteMedia(item.id)}
-                  className="text-gray-400 hover:text-red-500 p-1"
-                  aria-label="Delete"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            </div>
+        {isLoading ? (
+          <div className="flex items-center justify-center py-16 text-[var(--text-muted)]">
+            <Loader2 className="h-6 w-6 animate-spin" />
+            <span className="ms-2 text-xs">{isAr ? 'جارِ تحميل مكتبة الوسائط...' : 'Loading media library...'}</span>
           </div>
-        ))}
+        ) : mediaList.length === 0 ? (
+          <div className="bg-[var(--card-bg)] border border-[var(--border-color)] rounded-sm p-12 text-center text-[var(--text-muted)]">
+            <ImageIcon className="h-10 w-10 mx-auto mb-3 opacity-30 stroke-1" />
+            <p className="text-sm font-medium text-[var(--text-main)]">
+              {isAr ? 'لا توجد وسائط مرفوعة حتى الآن' : 'No media assets found'}
+            </p>
+            <p className="text-xs text-[var(--text-muted)] mt-1 max-w-sm mx-auto">
+              {isAr
+                ? 'استخدم صندوق الرفع بالأعلى لرفع أول صورة أو فيديو ليتم حفظها فوراً على ImageKit وربطها بالمتجر.'
+                : 'Upload your first image or video above to store it on ImageKit CDN and link it in the catalog.'}
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+            {mediaList.map((item) => (
+              <div
+                key={item.id}
+                className="bg-[var(--card-bg)] rounded-sm border border-[var(--border-color)] overflow-hidden group shadow-sm flex flex-col transition-all hover:border-[var(--text-main)]"
+              >
+                {/* Media Preview Box */}
+                <div className="aspect-square bg-[var(--bg-secondary)] relative flex items-center justify-center overflow-hidden">
+                  {item.type === 'video' ? (
+                    <div className="flex flex-col items-center justify-center p-4 text-center">
+                      <Film className="h-8 w-8 text-[var(--text-main)] mb-1 opacity-70" />
+                      <span className="text-[10px] text-[var(--text-muted)] font-mono">VIDEO</span>
+                    </div>
+                  ) : (
+                    <Image
+                      src={item.url}
+                      alt={item.name}
+                      fill
+                      className="object-cover transition-transform duration-300 group-hover:scale-105"
+                      sizes="(max-width: 768px) 50vw, 20vw"
+                    />
+                  )}
+                  <div className="absolute top-2 start-2">
+                    <Badge variant={item.type === 'video' ? 'info' : 'default'} size="sm">
+                      {item.type === 'video' ? 'Video' : 'Image'}
+                    </Badge>
+                  </div>
+                </div>
+
+                {/* Info & Action Controls */}
+                <div className="p-3 flex-1 flex flex-col justify-between text-xs">
+                  <div>
+                    <p className="font-medium text-[var(--text-main)] truncate" title={item.name}>
+                      {item.name}
+                    </p>
+                    <p className="text-[10px] text-[var(--text-muted)] mt-0.5">
+                      {new Date(item.createdAt).toLocaleDateString('ar-EG')}
+                    </p>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2.5 mt-2 border-t border-[var(--border-color)]">
+                    <button
+                      type="button"
+                      onClick={() => copyUrl(item.url, item.id)}
+                      className="text-[11px] text-[var(--text-main)] font-medium hover:underline flex items-center gap-1 active:scale-95 transition-transform"
+                    >
+                      {copiedId === item.id ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+                      <span>{copiedId === item.id ? (isAr ? 'تم النسخ' : 'Copied') : (isAr ? 'نسخ الرابط' : 'Copy CDN')}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteMedia(item.id, item.id)}
+                      className="text-[var(--text-muted)] hover:text-red-500 p-1 active:scale-90 transition-transform"
+                      aria-label="Delete media"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

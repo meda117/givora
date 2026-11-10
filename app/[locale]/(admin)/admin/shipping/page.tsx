@@ -1,9 +1,11 @@
 'use client';
-import { useState } from 'react';
-import { Truck, Plus, Trash2, Search, Edit2, Check, X, ShieldCheck } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Truck, Search, Edit2, Check, X, ShieldCheck, RefreshCw } from 'lucide-react';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebase/client';
+import { COLLECTIONS } from '@/lib/firebase/collections';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
 import { formatPrice } from '@/lib/utils';
 import { EGYPTIAN_GOVERNORATES } from '@/lib/data/egyptian-locations';
 import type { Locale } from '@/types';
@@ -21,7 +23,7 @@ interface EditableGovernorateShipping {
   cityCount: number;
 }
 
-const INITIAL_GOVERNORATES_SHIPPING: EditableGovernorateShipping[] = EGYPTIAN_GOVERNORATES.map(g => ({
+const DEFAULT_SHIPPING: EditableGovernorateShipping[] = EGYPTIAN_GOVERNORATES.map((g) => ({
   id: g.id,
   nameAr: g.name.ar,
   nameEn: g.name.en,
@@ -37,18 +39,65 @@ const INITIAL_GOVERNORATES_SHIPPING: EditableGovernorateShipping[] = EGYPTIAN_GO
 export default function AdminShippingPage() {
   const isAr = true;
   const locale: Locale = 'ar';
-  const [shippingList, setShippingList] = useState<EditableGovernorateShipping[]>(INITIAL_GOVERNORATES_SHIPPING);
+  const [shippingList, setShippingList] = useState<EditableGovernorateShipping[]>(DEFAULT_SHIPPING);
   const [search, setSearch] = useState('');
   const [globalThreshold, setGlobalThreshold] = useState('1000');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editFee, setEditFee] = useState<number>(50);
   const [editMinDays, setEditMinDays] = useState<number>(1);
   const [editMaxDays, setEditMaxDays] = useState<number>(2);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
 
-  const filteredList = shippingList.filter(item =>
-    item.nameAr.toLowerCase().includes(search.toLowerCase()) ||
-    item.nameEn.toLowerCase().includes(search.toLowerCase()) ||
-    item.code.toLowerCase().includes(search.toLowerCase())
+  // Fetch real settings from Firestore
+  useEffect(() => {
+    const fetchShipping = async () => {
+      setIsLoading(true);
+      try {
+        const snap = await getDoc(doc(db, COLLECTIONS.WEBSITE_SETTINGS, 'shipping'));
+        if (snap.exists()) {
+          const data = snap.data();
+          if (data.globalThreshold) setGlobalThreshold(String(data.globalThreshold));
+          if (Array.isArray(data.governorates) && data.governorates.length > 0) {
+            setShippingList(data.governorates);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load shipping settings from Firestore:', err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    fetchShipping();
+  }, []);
+
+  const persistToFirestore = async (updatedList: EditableGovernorateShipping[], threshold: string) => {
+    setIsSaving(true);
+    try {
+      await setDoc(
+        doc(db, COLLECTIONS.WEBSITE_SETTINGS, 'shipping'),
+        {
+          globalThreshold: parseFloat(threshold) || 1000,
+          governorates: updatedList,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 2500);
+    } catch (err) {
+      console.error('Failed to persist shipping to Firestore:', err);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const filteredList = shippingList.filter(
+    (item) =>
+      item.nameAr.toLowerCase().includes(search.toLowerCase()) ||
+      item.nameEn.toLowerCase().includes(search.toLowerCase()) ||
+      item.code.toLowerCase().includes(search.toLowerCase())
   );
 
   const startEdit = (item: EditableGovernorateShipping) => {
@@ -58,165 +107,185 @@ export default function AdminShippingPage() {
     setEditMaxDays(item.deliveryMax);
   };
 
-  const saveEdit = (id: string) => {
-    setShippingList(prev => prev.map(item =>
+  const saveEdit = async (id: string) => {
+    const nextList = shippingList.map((item) =>
       item.id === id
         ? { ...item, fee: editFee, deliveryMin: editMinDays, deliveryMax: editMaxDays }
         : item
-    ));
+    );
+    setShippingList(nextList);
     setEditingId(null);
+    await persistToFirestore(nextList, globalThreshold);
   };
 
-  const toggleActive = (id: string) => {
-    setShippingList(prev => prev.map(item =>
+  const toggleActive = async (id: string) => {
+    const nextList = shippingList.map((item) =>
       item.id === id ? { ...item, isActive: !item.isActive } : item
-    ));
+    );
+    setShippingList(nextList);
+    await persistToFirestore(nextList, globalThreshold);
   };
 
-  const applyGlobalThreshold = () => {
+  const applyGlobalThreshold = async () => {
     const thresholdNum = parseFloat(globalThreshold) || 1000;
-    setShippingList(prev => prev.map(item => ({ ...item, freeThreshold: thresholdNum })));
+    const nextList = shippingList.map((item) => ({ ...item, freeThreshold: thresholdNum }));
+    setShippingList(nextList);
+    await persistToFirestore(nextList, globalThreshold);
   };
 
   return (
     <div className="space-y-6">
       {/* Title */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-neutral-200 dark:border-neutral-800">
         <div>
-          <h1 className="text-2xl font-semibold text-[var(--text-main)]">
-            {isAr ? 'إدارة الشحن لمحافظات مصر (27 محافظة)' : 'Egyptian Governorates Shipping (27 Governorates)'}
+          <h1 className="text-2xl font-bold tracking-tight text-neutral-900 dark:text-white">
+            {isAr ? 'إدارة الشحن والتوصيل لمحافظات مصر (27 محافظة)' : 'Egyptian Governorates Shipping (27 Governorates)'}
           </h1>
-          <p className="text-xs text-[var(--text-secondary)] mt-1">
+          <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1">
             {isAr
-              ? 'التحكم في مصاريف الشحن لكل محافظة ومدة التوصيل وحد الشحن المجاني والتفعيل والإيقاف'
-              : 'Control shipping rates, delivery timelines, free shipping thresholds, and active status for all 27 Egyptian governorates'}
+              ? 'تعديل أسعار الشحن ومدة التوصيل وحد الشحن المجاني وحفظها فورياً في قاعدة البيانات'
+              : 'Configure shipping fees, delivery timelines, and free shipping thresholds stored in live database'}
           </p>
         </div>
+        {saveSuccess && (
+          <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/40 px-3 py-1.5 rounded-xs border border-emerald-200 dark:border-emerald-800 flex items-center gap-1.5">
+            <Check className="h-4 w-4" />
+            <span>{isAr ? 'تم حفظ التعديلات في قاعدة البيانات!' : 'Saved to database!'}</span>
+          </span>
+        )}
       </div>
 
       {/* Global Free Shipping Setting Card */}
-      <div className="bg-[var(--card-bg)] p-5 border border-[var(--border-color)] rounded-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="bg-white dark:bg-[#1A1A1A] p-5 border border-neutral-200 dark:border-neutral-800 rounded-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xs">
         <div className="flex items-center gap-3">
-          <div className="p-2.5 rounded-sm bg-[var(--bg-secondary)] border border-[var(--border-color)]">
-            <Truck className="h-5 w-5 text-[var(--text-main)]" />
+          <div className="p-2.5 rounded-sm bg-neutral-100 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700">
+            <Truck className="h-5 w-5 text-neutral-900 dark:text-white" />
           </div>
           <div>
-            <h3 className="text-sm font-semibold text-[var(--text-main)]">
+            <h3 className="text-sm font-bold text-neutral-900 dark:text-white">
               {isAr ? 'حد الشحن المجاني العام في مصر' : 'Global Free Shipping Threshold in Egypt'}
             </h3>
-            <p className="text-xs text-[var(--text-secondary)]">
-              {isAr ? 'أي طلب يتجاوز هذا المبلغ يحصل العميل على توصيل مجاني تلقائياً' : 'Any order exceeding this value gets automatic free shipping'}
+            <p className="text-xs text-neutral-500 dark:text-neutral-400">
+              {isAr
+                ? 'أي طلب يتجاوز هذا المبلغ يحصل العميل على توصيل مجاني تلقائياً'
+                : 'Any order exceeding this value gets automatic free shipping'}
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          <Input
-            type="number"
-            value={globalThreshold}
-            onChange={(e) => setGlobalThreshold(e.target.value)}
-            className="w-32 text-end font-mono"
-            rightElement={<span className="text-xs text-[var(--text-secondary)]">ج.م</span>}
-          />
-          <Button variant="outline" size="sm" onClick={applyGlobalThreshold}>
-            {isAr ? 'تطبيق على الكل' : 'Apply All'}
+          <div className="w-32">
+            <Input
+              type="number"
+              value={globalThreshold}
+              onChange={(e) => setGlobalThreshold(e.target.value)}
+              placeholder="1000"
+            />
+          </div>
+          <span className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">ج.م</span>
+          <Button onClick={applyGlobalThreshold} size="sm" isLoading={isSaving}>
+            {isAr ? 'تطبيق على كل المحافظات' : 'Apply to All'}
           </Button>
         </div>
       </div>
 
       {/* Search Bar */}
-      <div className="bg-[var(--card-bg)] rounded-sm border border-[var(--border-color)] p-4">
+      <div className="bg-white dark:bg-[#1A1A1A] rounded-sm border border-neutral-200 dark:border-neutral-800 p-4 max-w-md">
         <Input
-          placeholder={isAr ? 'بحث باسم المحافظة (مثال: القاهرة، الدقهلية، الإسكندرية، أسوان)...' : 'Search governorate...'}
+          placeholder={isAr ? 'بحث عن محافظة...' : 'Search governorate...'}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           leftElement={<Search className="h-4 w-4" />}
         />
       </div>
 
-      {/* 27 Governorates Table */}
-      <div className="bg-[var(--card-bg)] rounded-sm border border-[var(--border-color)] overflow-hidden">
+      {/* Governorates Table */}
+      <div className="bg-white dark:bg-[#1A1A1A] rounded-sm border border-neutral-200 dark:border-neutral-800 overflow-hidden shadow-xs">
         <div className="overflow-x-auto">
-          <table className="w-full text-start text-xs border-collapse">
+          <table className="admin-table">
             <thead>
-              <tr className="border-b border-[var(--border-color)] bg-[var(--bg-secondary)] text-[var(--text-secondary)] text-start">
-                <th className="py-3 px-4 font-medium">{isAr ? 'المحافظة' : 'Governorate'}</th>
-                <th className="py-3 px-4 font-medium">{isAr ? 'كود المحافظة' : 'Code'}</th>
-                <th className="py-3 px-4 font-medium">{isAr ? 'عدد المدن/المراكز' : 'Cities/Districts'}</th>
-                <th className="py-3 px-4 font-medium">{isAr ? 'رسوم الشحن' : 'Shipping Fee'}</th>
-                <th className="py-3 px-4 font-medium">{isAr ? 'مدة التوصيل' : 'Delivery Days'}</th>
-                <th className="py-3 px-4 font-medium">{isAr ? 'حد الشحن المجاني' : 'Free Shipping At'}</th>
-                <th className="py-3 px-4 font-medium">{isAr ? 'حالة التوصيل' : 'Status'}</th>
-                <th className="py-3 px-4 font-medium text-end">{isAr ? 'إجراءات' : 'Actions'}</th>
+              <tr>
+                <th>{isAr ? 'المحافظة' : 'Governorate'}</th>
+                <th>{isAr ? 'كود المنطقة' : 'Code'}</th>
+                <th>{isAr ? 'المدن المغطاة' : 'Cities'}</th>
+                <th>{isAr ? 'مصاريف الشحن' : 'Shipping Fee'}</th>
+                <th>{isAr ? 'مدة التوصيل المقدرة' : 'Delivery Estimate'}</th>
+                <th>{isAr ? 'الشحن المجاني' : 'Free Shipping'}</th>
+                <th>{isAr ? 'الحالة' : 'Status'}</th>
+                <th className="text-end">{isAr ? 'إجراءات' : 'Actions'}</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[var(--border-color)]">
+            <tbody>
               {filteredList.map((gov) => {
                 const isEditing = editingId === gov.id;
                 return (
-                  <tr key={gov.id} className="hover:bg-[var(--bg-secondary)] transition-colors">
-                    <td className="py-3.5 px-4">
+                  <tr key={gov.id}>
+                    <td>
                       <div>
-                        <p className="font-medium text-sm text-[var(--text-main)]">{gov.nameAr}</p>
-                        <p className="text-[11px] text-[var(--text-secondary)]">{gov.nameEn}</p>
+                        <p className="font-semibold text-xs text-neutral-900 dark:text-white">{gov.nameAr}</p>
+                        <p className="text-[11px] text-neutral-400 dark:text-neutral-500">{gov.nameEn}</p>
                       </div>
                     </td>
 
-                    <td className="py-3.5 px-4 font-mono text-[var(--text-secondary)]">
-                      {gov.code}
+                    <td className="font-mono text-xs text-neutral-500 uppercase">{gov.code}</td>
+
+                    <td>
+                      <span className="text-xs font-semibold px-2 py-0.5 rounded-xs border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800 text-neutral-800 dark:text-neutral-200">
+                        {gov.cityCount} {isAr ? 'مدينة' : 'cities'}
+                      </span>
                     </td>
 
-                    <td className="py-3.5 px-4 text-[var(--text-secondary)]">
-                      {gov.cityCount} {isAr ? 'مدينة وميدان' : 'cities'}
-                    </td>
-
-                    <td className="py-3.5 px-4 font-semibold text-[var(--text-main)]">
+                    <td>
                       {isEditing ? (
-                        <div className="flex items-center gap-1 w-28">
+                        <div className="flex items-center gap-1">
                           <input
                             type="number"
                             value={editFee}
                             onChange={(e) => setEditFee(parseFloat(e.target.value) || 0)}
-                            className="w-16 h-8 px-2 rounded border border-[var(--border-color)] bg-[var(--bg-main)] text-[var(--text-main)] font-mono text-xs"
+                            className="w-16 h-8 px-2 rounded-xs border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white font-mono text-xs"
                           />
-                          <span className="text-[11px]">ج.م</span>
+                          <span className="text-[10px]">ج.م</span>
                         </div>
                       ) : (
-                        formatPrice(gov.fee, 'EGP', locale)
+                        <span className="font-semibold text-xs text-neutral-900 dark:text-white">
+                          {formatPrice(gov.fee, 'EGP', locale)}
+                        </span>
                       )}
                     </td>
 
-                    <td className="py-3.5 px-4 text-[var(--text-secondary)]">
+                    <td className="text-xs text-neutral-600 dark:text-neutral-400">
                       {isEditing ? (
-                        <div className="flex items-center gap-1 w-32">
+                        <div className="flex items-center gap-1">
                           <input
                             type="number"
                             value={editMinDays}
                             onChange={(e) => setEditMinDays(parseInt(e.target.value) || 1)}
-                            className="w-10 h-8 px-1.5 rounded border border-[var(--border-color)] bg-[var(--bg-main)] text-[var(--text-main)] font-mono text-center text-xs"
+                            className="w-10 h-8 px-1.5 rounded-xs border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white font-mono text-center text-xs"
                           />
                           <span>-</span>
                           <input
                             type="number"
                             value={editMaxDays}
                             onChange={(e) => setEditMaxDays(parseInt(e.target.value) || 2)}
-                            className="w-10 h-8 px-1.5 rounded border border-[var(--border-color)] bg-[var(--bg-main)] text-[var(--text-main)] font-mono text-center text-xs"
+                            className="w-10 h-8 px-1.5 rounded-xs border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white font-mono text-center text-xs"
                           />
-                          <span className="text-[10px]">{isAr ? 'يوم' : 'd'}</span>
+                          <span className="text-[10px]">{isAr ? 'أيام' : 'days'}</span>
                         </div>
                       ) : (
-                        <span>{gov.deliveryMin} - {gov.deliveryMax} {isAr ? 'أيام عمل' : 'business days'}</span>
+                        <span>
+                          {gov.deliveryMin} - {gov.deliveryMax} {isAr ? 'أيام عمل' : 'business days'}
+                        </span>
                       )}
                     </td>
 
-                    <td className="py-3.5 px-4 text-emerald-600 dark:text-emerald-400 font-medium">
+                    <td className="text-emerald-600 dark:text-emerald-400 font-semibold text-xs">
                       {isAr ? `فوق ${gov.freeThreshold} ج.م` : `Over ${gov.freeThreshold} EGP`}
                     </td>
 
-                    <td className="py-3.5 px-4">
+                    <td>
                       <button
                         onClick={() => toggleActive(gov.id)}
-                        className={`text-[11px] font-medium px-2 py-0.5 rounded-sm transition-colors border ${
+                        className={`text-[11px] font-semibold px-2 py-0.5 rounded-xs transition-colors border ${
                           gov.isActive
                             ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
                             : 'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20'
@@ -226,19 +295,19 @@ export default function AdminShippingPage() {
                       </button>
                     </td>
 
-                    <td className="py-3.5 px-4 text-end">
+                    <td className="text-end">
                       {isEditing ? (
                         <div className="flex items-center justify-end gap-1">
                           <button
                             onClick={() => saveEdit(gov.id)}
-                            className="p-1.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
+                            className="p-1.5 rounded-xs bg-black text-white dark:bg-white dark:text-black transition-colors"
                             title={isAr ? 'حفظ التعديل' : 'Save'}
                           >
                             <Check className="h-3.5 w-3.5" />
                           </button>
                           <button
                             onClick={() => setEditingId(null)}
-                            className="p-1.5 rounded border border-[var(--border-color)] text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] transition-colors"
+                            className="p-1.5 rounded-xs border border-neutral-200 dark:border-neutral-800 text-neutral-500 hover:text-black dark:hover:text-white transition-colors"
                             title={isAr ? 'إلغاء' : 'Cancel'}
                           >
                             <X className="h-3.5 w-3.5" />
@@ -247,7 +316,7 @@ export default function AdminShippingPage() {
                       ) : (
                         <button
                           onClick={() => startEdit(gov)}
-                          className="p-1.5 rounded border border-[var(--border-color)] text-[var(--text-secondary)] hover:text-[var(--text-main)] hover:bg-[var(--bg-secondary)] transition-colors"
+                          className="p-1.5 rounded-xs border border-neutral-200 dark:border-neutral-800 text-neutral-500 hover:text-black dark:hover:text-white transition-colors"
                           title={isAr ? 'تعديل السعر والمدة' : 'Edit Fee & Timeline'}
                         >
                           <Edit2 className="h-3.5 w-3.5" />
