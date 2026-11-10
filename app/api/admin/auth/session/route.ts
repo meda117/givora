@@ -66,6 +66,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Persist super admin in Firestore admin_users collection
+    if (isSuperAdmin) {
+      try {
+        const { setDoc } = await import('firebase/firestore');
+        await setDoc(doc(db, 'admin_users', uid), {
+          uid,
+          email,
+          role: 'super_admin',
+          isActive: true,
+          displayName: 'Super Admin',
+          updatedAt: new Date().toISOString(),
+        }, { merge: true });
+      } catch (firestoreErr) {
+        console.warn('Super admin Firestore record update (non-fatal):', firestoreErr);
+      }
+    }
+
     // 3. Set secure HTTP-only session cookie
     const sessionPayload = {
       uid,
