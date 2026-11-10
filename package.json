@@ -8,9 +8,28 @@
     "start": "next start"
   },
   "dependencies": {
+    "@hookform/resolvers": "^7.0.5",
+    "@imagekit/nodejs": "^7.14.0",
+    "@tailwindcss/postcss": "^4.3.5",
+    "clsx": "^2.1.1",
+    "cookies-next": "^6.1.1",
+    "date-fns": "^4.4.0",
+    "firebase": "^13.2.0",
+    "firebase-admin": "^14.5.0",
+    "imagekit": "^6.0.0",
+    "lucide-react": "^1.70.0",
     "next": "16.4.6",
+    "next-intl": "^4.14.9",
+    "postcss": "^8.5.32",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "react-hook-form": "^7.91.0",
+    "react-hot-toast": "^2.6.1",
+    "sharp": "^0.35.5",
+    "swiper": "^14.4.0",
+    "tailwind-merge": "^3.7.0",
+    "zod": "^4.6.7",
+    "zustand": "^5.1.0"
   },
   "devDependencies": {
     "@tailwindcss/turbopack": "4.3.3",
